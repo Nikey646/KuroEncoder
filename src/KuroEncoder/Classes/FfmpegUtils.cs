@@ -1,8 +1,11 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Text;
 using System.Threading.Tasks;
+using AnimeMetadataCollector.Extensions;
 using Serilog;
 using SharpCompress.Archives;
 
@@ -84,6 +87,88 @@ namespace KuroEncoder.Classes
             await File.WriteAllTextAsync(ffmpegVersionPath, newVersion);
 
             return ffmpegPath;
+        }
+
+
+        // TODO: FFMPEG Args
+        public static Process StartFfmpeg(String ffmpeg, TimeSpan duration, String inputFile, Int32 ffmpegThreads,
+            String audioMap, String subtitleMap, Int32 audioBitrate, String videoFilter, Single crf,
+            Int32 videoStreamIndex, Double frames, String outputFile)
+        {
+            var startInfo = new ProcessStartInfo(ffmpeg);
+            startInfo.Arguments =
+                $"-i {inputFile.Quote()} -hide_banner -y -threads {ffmpegThreads} -map 0 {audioMap} {subtitleMap} -c:s copy -c:a aac -b:a {audioBitrate}k {videoFilter} -c:v libx265 -preset fast -crf {crf} -pix_fmt yuv420p -frames:{videoStreamIndex} {frames} {outputFile.Quote()}";
+            startInfo.UseShellExecute = false;
+            startInfo.CreateNoWindow = true;
+            startInfo.RedirectStandardError = true;
+
+
+            var process = Process.Start(startInfo);
+
+            var lastPercentage = 0d;
+            var progressBar = new ProgressBar("Encoding Progress: ");
+
+            var encodeSpeed = "";
+
+            progressBar.SetSuffixFunc(() => encodeSpeed);
+
+            void ProgressReport(Object sender, DataReceivedEventArgs e)
+            {
+                if (e?.Data == null)
+                    return;
+
+                var chunks = e.Data.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                var time = chunks.FirstOrDefault(c => c.StartsWith("time="));
+
+                var speed = 0d;
+
+                for (var i = 0; i < chunks.Length; i++)
+                {
+                    var chunk = chunks[i];
+                    if (chunk.StartsWith("speed="))
+                    {
+                        if (chunk.Length == 6)
+                            chunk = chunks[i + 1];
+                        else chunk = chunk.Substring(6);
+
+                        speed = Double.Parse(chunk[..^1]);
+
+                        break;
+                    }
+                }
+
+                encodeSpeed = $" x{speed:0.00} ";
+
+                if (time.IsEmpty())
+                    return;
+
+                var encodedTime = TimeSpan.Parse(time.Substring(5)).TotalSeconds;
+                var totalTime = duration.TotalSeconds;
+
+                var percentage = encodedTime / totalTime;
+                if (percentage > lastPercentage)
+                {
+                    progressBar.Report(percentage);
+                    // this._logger.Trace("{file} is currently {percentage}% encoded.", file.Name, percentage);
+                    lastPercentage = percentage;
+                }
+            }
+
+            void OnExited(Object sender, EventArgs e)
+            {
+                progressBar?.Dispose();
+                if (process == null)
+                    return;
+
+                process.Exited -= OnExited;
+                process.ErrorDataReceived -= ProgressReport;
+            }
+
+            process.Exited += OnExited;
+            process.ErrorDataReceived += ProgressReport;
+            process.BeginErrorReadLine();
+
+            return process;
         }
     }
 }

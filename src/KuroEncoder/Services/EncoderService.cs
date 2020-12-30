@@ -102,7 +102,7 @@ namespace KuroEncoder.Services
                     var outputFile = new FileInfo(Path.Combine(outputFolder, Path.ChangeExtension(file.Name, ".mkv")));
 
                     var videoFilter = $"-vf scale={scale}";
-                    if (mediaInfo.Height == this._options.Resolution)
+                    if (mediaInfo.Height <= this._options.Resolution)
                         videoFilter = String.Empty;
 
                     var audioTrack = this.FindBestAudioTrack(mediaInfo.AudioStreams.ToArray());
@@ -120,78 +120,19 @@ namespace KuroEncoder.Services
                         }
                     }
 
-                    var startInfo = new ProcessStartInfo(ffmpeg);
-                    startInfo.Arguments =
-                        $"-i {file.FullName.Quote()} -hide_banner -y -threads {this._options.Threads} -map 0 {audioMap} {subtitleMap} -c:s copy -c:a aac -b:a {this._options.Bitrate}k {videoFilter} -c:v libx265 -preset fast -crf {this._options.CRF} -pix_fmt yuv420p -frames:{mediaInfo.BestVideoStream.StreamNumber} {frames} {outputFile.FullName.Quote()}";
-                    startInfo.UseShellExecute = false;
-                    startInfo.CreateNoWindow = true;
-                    startInfo.RedirectStandardError = true;
+                    var process = FfmpegUtils.StartFfmpeg(ffmpeg, mediaInfo.BestVideoStream.Duration, file.FullName,
+                        this._options.Threads, audioMap, subtitleMap, this._options.Bitrate, videoFilter,
+                        this._options.CRF, mediaInfo.BestVideoStream.StreamPosition, frames, outputFile.FullName);
 
                     this._logger.Debug("Starting ffmpeg with the following arguments: {arguments}",
-                        startInfo.Arguments);
+                        process.StartInfo.Arguments);
 
-                    var process = Process.Start(startInfo);
                     this._processes.Add(process);
 
-                    var lastPercentage = 0d;
-                    var progressBar = new ProgressBar("Encoding Progress: ");
-
-                    var encodeSpeed = "";
-
-                    progressBar.SetSuffixFunc(() => encodeSpeed);
-
-                    void ProgressReport(Object sender, DataReceivedEventArgs e)
-                    {
-                        if (e?.Data == null)
-                            return;
-
-                        var chunks = e.Data.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                        var time = chunks.FirstOrDefault(c => c.StartsWith("time="));
-
-                        var speed = 0d;
-
-                        for (var i = 0; i < chunks.Length; i++)
-                        {
-                            var chunk = chunks[i];
-                            if (chunk.StartsWith("speed="))
-                            {
-                                if (chunk.Length == 6)
-                                    chunk = chunks[i + 1];
-                                else chunk = chunk.Substring(6);
-
-                                speed = Double.Parse(chunk[..^1]);
-
-                                break;
-                            }
-                        }
-
-                        encodeSpeed = $" x{speed:0.00} ";
-
-                        if (time.IsEmpty())
-                            return;
-
-                        var encodedTime = TimeSpan.Parse(time.Substring(5)).TotalSeconds;
-                        var totalTime = mediaInfo.BestVideoStream.Duration.TotalSeconds;
-
-                        var percentage = encodedTime / totalTime;
-                        if (percentage > lastPercentage)
-                        {
-                            progressBar.Report(percentage);
-                            // this._logger.Trace("{file} is currently {percentage}% encoded.", file.Name, percentage);
-                            lastPercentage = percentage;
-                        }
-                    }
-
-                    using (progressBar)
-                    {
-                        process.ErrorDataReceived += ProgressReport;
-                        process.BeginErrorReadLine();
-
-                        process.WaitForExit();
-                        process.ErrorDataReceived -= ProgressReport;
-                    }
+                    process.WaitForExit();
 
                     this._processes.Remove(process);
+                    process.Dispose();
                 }
             }
             catch (Exception crap)
