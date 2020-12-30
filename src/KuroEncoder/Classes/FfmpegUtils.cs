@@ -90,7 +90,6 @@ namespace KuroEncoder.Classes
         }
 
 
-        // TODO: FFMPEG Args
         public static Process StartFfmpeg(String ffmpeg, TimeSpan duration, String inputFile, Int32 ffmpegThreads,
             String audioMap, String subtitleMap, Int32 audioBitrate, String videoFilter, Single crf,
             Int32 videoStreamIndex, Double frames, String outputFile)
